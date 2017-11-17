@@ -1,0 +1,206 @@
+import os
+import pdb
+
+target = 'luDecomp'
+src = ['critical.cpp','luDecomp.cpp']
+
+def str2bool(v):
+  return v.lower() in ('yes', 'true', 't', '1')
+
+home = os.environ['HOME']
+mklroot = os.environ['MKLROOT']
+
+env = Environment(ENV = os.environ)
+conf = Configure(env)
+
+architecture = ARGUMENTS.get('architecture', 'skl')
+Skylake = ['skylake', 'skl']
+Broadwell = ['broadwell', 'bdw']
+KnightsLanding = ['knightslanding', 'knl']
+
+compiler = ARGUMENTS.get('compiler', 'Intel')
+Intel = ['intel', 'icpc', 'icc', 'intel compiler']
+GNU = ['gnu', 'gcc', 'g++', 'gnu compiler']
+LLVM = ['llvm', 'clang', 'clang++']
+PGI = ['pgi', 'pgc++', 'pgcc', 'pgi compiler']
+AOCC = ['amd', 'aocc', 'aocc++', 'amd compiler']
+ZAPCC = ['zapcc', 'zapcc++', 'zapcc compiler']
+
+algorithm = ARGUMENTS.get('algorithm', "")
+env.Append(CCFLAGS='-D__ALGORITHM__=%s'%(algorithm))
+
+auto = ARGUMENTS.get('auto', 'False')
+if str2bool(auto):
+    env.Append(CCFLAGS='-D__AUTO__')
+
+hbm = ARGUMENTS.get('hbm', 'False')
+if str2bool(hbm):
+    if not conf.CheckLibWithHeader('memkind', 'hbwmalloc.h', 'c'):
+        print('Did not find libmemkind')
+    else:
+        env.Append(CCFLAGS='-D__HBM__')
+
+assembly = ARGUMENTS.get('assembly', 'False')
+if str2bool(assembly):
+    if compiler.lower() in Intel + GNU + LLVM:
+        env.Append(CCFLAGS=['-save-temps']) #,'-ip-no-inlining','-ip-no-pinlining'])
+    elif compiler.lower() in PGI:
+        env.Append(CCFLAGS=['-Mkeepasm']) # For PGI C++
+
+advisor = ARGUMENTS.get('advisor', "False")
+if str2bool(advisor):
+    if compiler.lower() in Intel:
+        env.Append(CPPPATH=[os.path.join(home, 'intel/advisor/include')])
+        if not conf.CheckCHeader('advisor-annotate.h'):
+            print('Intel Advisor annotations header not found')
+            Exit(1)
+        else:
+            env.Append(CCFLAGS='-D__ADVIXE__')
+    else:
+        print('You must use the Intel compiler (default) if you want to run Intel Advisor!')
+        Exit(1)
+
+debug = ARGUMENTS.get('debug', 'False')
+if str2bool(debug):
+    env.Append(CCFLAGS=['-g','-O0'])
+else:
+    if str2bool(advisor):
+        env.Append(CCFLAGS=['-g','-O2'])
+    else:
+        env.Append(CCFLAGS=['-O3'])
+
+polly = ARGUMENTS.get('polly', 'True')
+if str2bool(polly):
+    if compiler.lower() in LLVM:
+        pollyFlags = ['-mllvm','-polly','-mllvm','-polly-vectorizer=stripmine']
+    else:
+        pollyFlags = []
+else:
+    pollyFlags = []
+
+if compiler.lower in Intel + GNU + LLVM:
+    env.Append(CPPFLAGS=['-Wall'])
+elif compiler.lower in PGI:
+    env.Append(CPPFLAGS=['-Minform=warn'])
+
+
+if compiler.lower() in Intel:
+    print('Using Intel compiler')
+    Intel = 'intel'
+    env.Replace(CC='icc', CXX='icpc')
+    env.Append(CPPPATH=[os.path.join(home, Intel, 'compilers_and_libraries', 'linux', 'include')])
+    env.Append(LIBPATH=[os.path.join(home, Intel, 'compilers_and_libraries', 'linux', 'lib', 'intel64')])
+    env.Append(LIBS=['iomp5', 'm'])
+    env.Append(CPPFLAGS=['-std=c++14', '-qopenmp','-qopenmp-simd','-qopt-report=5', '-qopt-assume-safe-padding'])#,'-fp-model','consistent'])
+    if architecture in Skylake:
+        env.Append(CPPFLAGS=['-xCORE-AVX512','-qopt-zmm-usage=high'])
+    elif architecture in Broadwell:
+        env.Append(CPPFLAGS=['-xCORE-AVX2'])
+    elif architecture in Knightslanding:
+        env.Append(CPPFLAGS=['-xMIC-AVX512'])
+    else:
+        env.Append(CPPFLAGS=['-xHost'])
+    if str2bool(assembly):
+        env.Append(CCFLAGS=['-qopt-report-embed', '-g'])
+elif compiler.lower() in GNU:
+    print('Using GNU compiler')
+    GNU = 'gcc-7.2.0'
+    env.Replace(CC='gcc', CXX='g++')
+    env.Append(CPPPATH=[os.path.join(home, GNU, 'include')])
+    env.Append(LIBPATH=[os.path.join(home, GNU, 'lib64')])
+    env.Append(LIBS=['gomp', 'm'])
+    env.Append(CPPFLAGS=['-std=c++14', '-m64', '-ffast-math','-fassociative-math','-ftree-vectorize','-ftree-vectorizer-verbose=0','-fopenmp','-fopenmp-simd','-fopt-info-all=%s.o.gnurpt'%(target)])
+    if architecture in Skylake:
+        env.Append(CPPFLAGS=['-march=skylake-avx512'])
+    elif architecture in Broadwell:
+        env.Append(CPPFLAGS=['-march=broadwell'])
+    elif architecture in Knightslanding:
+        env.Append(CPPFLAGS=['-march=knl'])
+    else:
+        env.Append(CPPFLAGS=['-march=native'])
+    if str2bool(assembly):
+        env.Append(CCFLAGS=['-fverbose-asm', '-g'])#'-fopt-info-all'
+elif compiler.lower() in LLVM:
+    print('Using LLVM compiler')
+    LLVM = 'LLVM-5.0.0'
+    env.Replace(CC='clang', CXX='clang++')
+    env.Append(CPPPATH=[os.path.join(home, LLVM, 'build', 'include', 'c++', 'v1'), os.path.join(home, LLVM, 'build', 'projects', 'openmp', 'runtime', 'src')])
+    env.Append(LIBPATH=[os.path.join(home, LLVM, 'build','lib')])
+    env.Append(LIBS=['omp', 'm'])
+    env.Append(LINKFLAGS = ['-fuse-ld=lld'])
+    env.Append(CPPFLAGS=['-std=c++14', '-m64', '-ffast-math', '-fassociative-math', '-mfma', '-ffp-contract=fast', '-fopenmp=libomp', '-Rpass=loop-vectorize', '-Rpass-missed=loop-vectorize', '-Rpass-analysis=loop-vectorize','-fsave-optimization-record', '-gline-tables-only', '-gcolumn-info'] + pollyFlags)
+    if architecture in Skylake:
+        env.Append(CPPFLAGS=['-march=skylake-avx512'])
+    elif architecture in Broadwell:
+        env.Append(CPPFLAGS=['-march=broadwell'])
+    elif architecture in Knightslanding:
+        env.Append(CPPFLAGS=['-march=knl'])
+    else:
+        env.Append(CPPFLAGS=['-march=native'])
+    if str2bool(assembly):
+        env.Append(CCFLAGS=['-fverbose-asm', '-g'])
+elif compiler.lower() in AOCC:
+    print('Using AOCC compiler')
+    AOCC = 'aocc'
+    env.Replace(CC='clang', CXX='clang++')
+    env.Append(CPPPATH=[os.path.join(home, AOCC, 'AOCC-1.0-Compiler', 'include')])
+    env.Append(LIBPATH=[os.path.join(home, AOCC, 'AOCC-1.0-Compiler', 'lib')])
+    env.Append(LIBS=['omp', 'm'])
+    env.Append(LINKFLAGS = ['-fuse-ld=lld'])
+    env.Append(CPPFLAGS=['-std=c++14', '-m64', '-ffast-math', '-fassociative-math', '-mfma', '-ffp-contract=fast', '-fopenmp=libomp', '-Rpass=loop-vectorize', '-Rpass-missed=loop-vectorize', '-Rpass-analysis=loop-vectorize','-fsave-optimization-record', '-gline-tables-only', '-gcolumn-info'] + pollyFlags)
+    if architecture in Skylake:
+        env.Append(CPPFLAGS=['-march=skylake-avx512'])
+    elif architecture in Broadwell:
+        env.Append(CPPFLAGS=['-march=broadwell'])
+    elif architecture in Knightslanding:
+        env.Append(CPPFLAGS=['-march=knl'])
+    else:
+        env.Append(CPPFLAGS=['-march=native'])
+    if str2bool(assembly):
+        env.Append(CCFLAGS=['-fverbose-asm', '-g'])
+elif compiler.lower() in ZAPCC:
+    print('Using ZAPCC compiler')
+    ZAPCC = 'zapcc'
+    LLVM = 'LLVM-5.0.0'
+    env.Replace(CC='zapcc', CXX='zapcc++')
+    env.Append(CPPPATH=[os.path.join(home, ZAPCC, 'lib', 'clang', '5.0.0', 'include'), os.path.join(home, LLVM, 'build', 'include', 'c++', 'v1'), os.path.join(home, LLVM, 'build', 'projects', 'openmp', 'runtime', 'src')])
+    env.Append(LIBPATH=[os.path.join(home, LLVM, 'build','lib')])
+    env.Append(LIBS=['omp', 'm'])
+    env.Append(LINKFLAGS = ['-fuse-ld=lld'])
+    env.Append(CPPFLAGS=['-std=c++14', '-m64', '-ffast-math', '-fassociative-math', '-mfma', '-ffp-contract=fast', '-fopenmp=libomp', '-Rpass=loop-vectorize', '-Rpass-missed=loop-vectorize', '-Rpass-analysis=loop-vectorize','-fsave-optimization-record', '-gline-tables-only', '-gcolumn-info'] + pollyFlags)
+    if architecture in Skylake:
+        env.Append(CPPFLAGS=['-march=skylake-avx512'])
+    elif architecture in Broadwell:
+        env.Append(CPPFLAGS=['-march=broadwell'])
+    elif architecture in Knightslanding:
+        env.Append(CPPFLAGS=['-march=knl'])
+    else:
+        env.Append(CPPFLAGS=['-march=native'])
+    if str2bool(assembly):
+        env.Append(CCFLAGS=['-fverbose-asm', '-g'])
+elif compiler.lower() in PGI:
+    print('Using PGI compiler')
+    PGI = 'pgi'
+    env.Replace(CC='pgcc', CXX='pgc++')
+    env.Append(CPPPATH=[os.path.join(home, PGI, 'linux86-64', '2017', 'include')])
+    env.Append(LIBPATH=[os.path.join(home, PGI, 'linux86-64', '2017', 'lib')])
+    env.Append(LIBS=['pgmp', 'm'])
+    env.Append(CPPFLAGS=['-tp=haswell', '-fast', '-O4', '-fma', '-Msmart', '-Mfma', '-Mcache_align', '-Mipa=all', '-Mmovnt', '-mp', '-Mquad', '-Msafeptr=all', '-Minfo=all', '-Mnoprefetch'])
+    env.Append(LINKFLAGS = ['-mp=bind']) # '-mp=allcores', '-mp=bind' , '-mp=trace'
+    if architecture in Skylake:
+        env.Append(CPPFLAGS=['-tp=haswell'])
+    elif architecture in Broadwell:
+        env.Append(CPPFLAGS=['-tp=haswell'])
+    elif architecture in Knightslanding:
+        env.Append(CPPFLAGS=['-tp=x64'])
+    else:
+        env.Append(CPPFLAGS=['-tp=x64'])
+    if str2bool(assembly):
+        env.Append(CCFLAGS=['-Manno', '-g'])
+else:
+    print('Unknown compiler!')
+    Exit(1)
+
+env = conf.Finish()
+
+env.Program(target, src)

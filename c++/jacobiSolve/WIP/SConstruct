@@ -1,0 +1,102 @@
+import os
+import pdb
+
+target = 'main'
+src = ['main.cpp']
+
+def str2bool(v):
+  return v.lower() in ('yes', 'true', 't', '1')
+
+env = Environment(ENV = os.environ)
+conf = Configure(env)
+
+compiler = ARGUMENTS.get('compiler', 'Intel')
+Intel = ['intel', 'icpc', 'icc', 'intel compiler']
+GNU = ['gnu', 'gcc', 'g++', 'gnu compiler']
+LLVM = ['llvm', 'clang', 'clang++']
+
+advisor = ARGUMENTS.get('advisor', "False")
+if str2bool(advisor):
+    if compiler.lower() in Intel:
+        env.Append(CPPPATH=['/opt/intel/advisor/include'])
+        if not conf.CheckCHeader('advisor-annotate.h'):
+            print 'Intel Advisor annotations header not found'
+            Exit(1)
+        else:
+            env.Append(CCFLAGS='-D__ADVIXE__')
+    else:
+        print 'You must use the Intel compiler (default) if you want to run Intel Advisor!'
+        Exit(1)
+
+polly = ARGUMENTS.get('polly', "False")
+if str2bool(polly):
+    if compiler.lower() in LLVM:
+        pollyFlags = ['-mllvm','-polly','-mllvm','-polly-vectorizer=stripmine']
+    else:
+        print 'You must use the LLVM compiler if you want to run Polly !'
+else:
+    pollyFlags = []
+
+if compiler.lower() in Intel:
+    print 'Using Intel compiler'
+    env.Replace(CC='icc', CXX='icpc')
+    env.Append(CPPPATH=['/opt/intel/compilers_and_libraries/linux/include'])
+    env.Append(LIBPATH=['/opt/intel/compilers_and_libraries/linux/lib/intel64'])
+    env.Append(CPPFLAGS=['-xHost','-qopenmp','-qopenmp-simd','-qopt-report', '-qopt-assume-safe-padding','-fp-model','consistent'])
+    if not conf.CheckCHeader('mathimf.h'):
+        print 'Did not find mathimf.h'
+        Exit(1)
+    if not conf.CheckLibWithHeader('iomp5', 'omp.h', 'CXX'):
+        print 'Did not find libiomp5'
+        Exit(1)
+elif compiler.lower() in GNU:
+    print 'Using GNU compiler'
+    env.Replace(CC='gcc', CXX='g++')
+    env.Append(CPPPATH=['/usr/include','/usr/lib/gcc/x86_64-redhat-linux/4.8.2/include'])
+    env.Append(LIBPATH=['/usr/local/lib', '/usr/local/lib64', '/usr/lib', '/usr/lib64', '/usr/lib/gcc/x86_64-redhat-linux/4.8.2'])
+    env.Append(CPPFLAGS=['-ffast-math','-fassociative-math','-ftree-vectorize','-ftree-vectorizer-verbose=0','-march=native','-fopenmp','-fopenmp-simd','-fopt-info-all=%s.o.gnurpt'%(target)])
+    if not conf.CheckLibWithHeader('m', 'math.h', 'CXX'):
+        print 'Did not find libm'
+        Exit(1)
+    if not conf.CheckLibWithHeader('gomp', 'omp.h', 'CXX'):
+        print 'Did not find libgomp'
+        Exit(1)
+elif compiler.lower() in LLVM:
+    print 'Using LLVM compiler'
+    env.Replace(CC='clang', CXX='clang++')
+    #env.Append(CPPPATH=['/home/AstroVPK/LLVM/build/projects/openmp/runtime/src'])
+    env.Append(LIBPATH=['/usr/local/lib','/usr/lib','/usr/local/lib64','/usr/lib64'])
+    env.Append(CCFLAGS=['-ffast-math','-fassociative-math','-march=native','-fopenmp=libomp', '-fsave-optimization-record']+pollyFlags) #,'-Rpass=loop-vectorize', '-Rpass-missed=loop-vectorize', '-Rpass-analysis=loop-vectorize','-fsave-optimization-record'])
+    if not conf.CheckLibWithHeader('m', 'math.h', 'CXX'):
+        print 'Did not find libm'
+        Exit(1)
+    if not conf.CheckLibWithHeader('omp', 'omp.h', 'CXX'):
+        print 'Did not find libomp'
+        Exit(1)
+else:
+    print 'Unknown compiler!'
+    Exit(1)
+
+env.Append(CPPFLAGS=['-std=c++14','-Wall'])
+HBM = ARGUMENTS.get('HBM', 'True')
+if not conf.CheckLibWithHeader('memkind', 'hbwmalloc.h', 'CXX'):
+    print 'Did not find libmemkind'
+else:
+    if str2bool(HBM):
+        env.Append(CCFLAGS='-D__HBM__')
+debug = ARGUMENTS.get('debug', 'False')
+assembly = ARGUMENTS.get('assembly', 'False')
+
+if str2bool(debug):
+    env.Append(CCFLAGS=['-g','-O0','-D__DEBUG__'])
+else:
+    if str2bool(advisor):
+        env.Append(CCFLAGS=['-g','-O2'])
+    else:
+        env.Append(CCFLAGS=['-O3'])
+if str2bool(assembly):
+    env.Append(CCFLAGS=['-save-temps']) #,'-ip-no-inlining','-ip-no-pinlining'])
+
+env = conf.Finish()
+
+env.Program(target, src)
